@@ -1,0 +1,14 @@
+**/appsettings*.json
+**/secrets.json
+**/.env
+**/.env.*
+**/bin/
+**/obj/
+.git/
+.vs/
+.azure/
+**/*.user
+**/*.pubxml
+**/*.pubxml.user
+Dockerfile
+.dockerignore

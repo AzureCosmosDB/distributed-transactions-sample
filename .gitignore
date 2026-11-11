@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+.azure/
+TestResults/
+*.user
+*.suo
+*.pubxml
+*.pubxml.user
+.env
+.env.*
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+.DS_Store

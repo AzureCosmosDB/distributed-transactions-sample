@@ -1,0 +1,883 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@inject CosmosDistributedTransactionService TransactionService
+@using System.Text.Json
+
+<PageTitle>Azure Cosmos DB | Distributed Transactions</PageTitle>
+
+<div class="demo-page">
+    <section class="hero" aria-labelledby="demo-title">
+        <div class="hero-content">
+            <span class="eyebrow">INTERACTIVE WALKTHROUGH · PUBLIC PREVIEW</span>
+            <h1 id="demo-title">Distributed Transactions,<br /><span>made visible.</span></h1>
+            <p>
+                Follow a transfer from Alice to Bob with Azure Cosmos DB. See two account balances
+                and a ledger entry change together in a single atomic transaction.
+            </p>
+            <div class="hero-chips" aria-label="Transaction scope">
+                <span>2 logical partitions</span>
+                <span>2 containers</span>
+                <span>1 atomic commit</span>
+            </div>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+            <span class="hero-orbit orbit-one"></span>
+            <span class="hero-orbit orbit-two"></span>
+            <span class="hero-core">A <span>↔</span> B</span>
+        </div>
+    </section>
+
+    @if (!TransactionService.IsConfigured)
+    {
+        <div class="notice notice-warning" role="alert">
+            Set CosmosDb__Endpoint to your Azure Cosmos DB HTTPS endpoint, then restart the app. Sign in with a developer identity locally, or enable managed identity in Azure, and grant it Cosmos DB data-plane access.
+        </div>
+    }
+
+    <div class="notice notice-info">New here? Start with steps 1 and 2 to see an atomic transfer. Steps 3–5 are optional experiments.</div>
+
+    <div class="step-divider"><span>THE WALKTHROUGH</span><span class="divider-line"></span><span>01 / 05</span></div>
+
+    <section class="step-card" aria-labelledby="reset-heading">
+        <div class="step-heading">
+            <div class="step-index">01</div>
+            <div>
+                <span class="step-label">INITIALIZE THE ACCOUNTS</span>
+                <h2 id="reset-heading">Reset Alice and Bob</h2>
+                <p>Set both accounts to 1,000 in one distributed write transaction. Either both balances reset, or neither does.</p>
+            </div>
+        </div>
+        <div class="step-body">
+            <div class="step-actions">
+                <button class="action-button" @onclick="ResetAsync" disabled="@ActionsDisabled">Reset both accounts <span aria-hidden="true">↗</span></button>
+                <span class="action-hint">Sets Alice and Bob to 1,000 each</span>
+            </div>
+            @if (lastAction == "reset" && lastResult is not null)
+            {
+                <div class="step-feedback @(lastResult.IsPending ? "feedback-pending" : lastResult.Succeeded ? "feedback-success" : "feedback-error")" role="status">
+                    <strong>@(lastResult.IsPending ? "Commit unconfirmed" : lastResult.Succeeded ? "Both accounts committed together" : "Reset did not complete")</strong>
+                    <span>@lastResult.Message</span>
+                </div>
+            }
+            <div class="section-bar">
+                <div><span class="live-dot"></span> Current balances <span class="section-caption">· consistent snapshot across both partitions</span></div>
+                <button class="text-button" @onclick="RefreshAsync" disabled="@ActionsDisabled">Refresh snapshot ↻</button>
+            </div>
+            @if (snapshot is null)
+            {
+                <div class="empty-state">Reset both accounts to begin, or refresh the snapshot if they already exist.</div>
+            }
+            else
+            {
+                <div class="balance-grid">
+                    <div class="balance-tile">
+                        <span class="avatar avatar-alice">A</span>
+                        <span class="balance-name">ALICE <small>pk: alice</small></span>
+                        <strong>@snapshot.AccountA.Balance.ToString("N2")</strong>
+                    </div>
+                    <div class="balance-tile">
+                        <span class="avatar avatar-bob">B</span>
+                        <span class="balance-name">BOB <small>pk: bob</small></span>
+                        <strong>@snapshot.AccountB.Balance.ToString("N2")</strong>
+                    </div>
+                </div>
+                <div class="balance-total"><span>Total across accounts</span><strong>@snapshot.Total.ToString("N2")</strong></div>
+            }
+        </div>
+    </section>
+
+    <div class="step-connector" aria-hidden="true"><span>↓</span></div>
+
+    <section class="step-card" aria-labelledby="transfer-heading">
+        <div class="step-heading">
+            <div class="step-index step-index-teal">02</div>
+            <div>
+                <span class="step-label">MOVE MONEY, ATOMICALLY</span>
+                <h2 id="transfer-heading">Transfer Alice → Bob</h2>
+                <p>Debit Alice, credit Bob, and create a ledger record as one distributed transaction across two containers.</p>
+            </div>
+        </div>
+        <div class="step-body">
+            <div class="transfer-panel">
+                <div class="transfer-route"><span class="route-name">ALICE</span><span class="route-arrow" aria-hidden="true">⟶</span><span class="route-name">BOB</span></div>
+                <div class="transfer-controls">
+                    <div class="amount-field">
+                        <label for="amount">TRANSFER AMOUNT</label>
+                        <div class="amount-input"><span aria-hidden="true">$</span><input id="amount" type="number" min="0.01" step="0.01" @bind="amount" disabled="@ActionsDisabled" /></div>
+                    </div>
+                    <button class="action-button action-button-teal" @onclick="TransferAsync" disabled="@ActionsDisabled">Transfer money <span aria-hidden="true">↗</span></button>
+                </div>
+            </div>
+            @if (lastAction == "transfer" && lastResult is not null)
+            {
+                <div class="step-feedback @(lastResult.IsPending ? "feedback-pending" : lastResult.Succeeded ? "feedback-success" : "feedback-error")" role="status">
+                    <strong>@(lastResult.IsPending ? "Commit unconfirmed" : lastResult.Succeeded ? "Transfer committed atomically" : "Transfer did not complete")</strong>
+                    <span>@lastResult.Message</span>
+                </div>
+            }
+            <div class="transaction-flow" aria-label="Transaction steps">
+                <span>① Read both accounts and ETags</span>
+                <span>② Patch both balances</span>
+                <span>③ Create ledger entry</span>
+                <span>④ Commit together</span>
+            </div>
+
+            <div class="section-bar documents-heading"><div><span class="live-dot"></span> Account documents <span class="section-caption">· same committed snapshot as the balances above</span></div></div>
+            @if (snapshot is null)
+            {
+                <div class="empty-state">After a confirmed reset or transfer, Alice's and Bob's documents appear here.</div>
+            }
+            else
+            {
+                <div class="document-grid">
+                    <article class="document-card">
+                        <div class="document-title"><span class="avatar avatar-alice">A</span><div><strong>Alice</strong><small>accounts / alice</small></div><span class="document-type">JSON</span></div>
+                        <pre><code>@JsonSerializer.Serialize(snapshot.AccountA, documentOptions)</code></pre>
+                    </article>
+                    <article class="document-card">
+                        <div class="document-title"><span class="avatar avatar-bob">B</span><div><strong>Bob</strong><small>accounts / bob</small></div><span class="document-type">JSON</span></div>
+                        <pre><code>@JsonSerializer.Serialize(snapshot.AccountB, documentOptions)</code></pre>
+                    </article>
+                </div>
+            }
+            <div class="section-bar"><div><span class="live-dot"></span> Transfer receipt <span class="section-caption">· one consistent read across two partitions and containers</span></div></div>
+            @if (receiptLedgerId is null || receiptLedgerPartitionKey is null)
+            {
+                <div class="empty-state">Complete a confirmed transfer to read its ledger entry together with both accounts.</div>
+            }
+            else
+            {
+                <div class="step-actions">
+                    <button class="secondary-button" @onclick="ReadReceiptAsync" disabled="@ActionsDisabled">Read transfer receipt</button>
+                    <span class="action-hint">Ledger ID: @receiptLedgerId · pk: @receiptLedgerPartitionKey</span>
+                </div>
+                @if (receiptError is not null)
+                {
+                    <div class="step-feedback feedback-error" role="status"><strong>Receipt read failed</strong><span>@receiptError</span></div>
+                }
+                @if (receipt is not null)
+                {
+                    <div class="stage-details" role="status">
+                        <strong>One committed snapshot · activity ID: <code>@receipt.ActivityId</code></strong>
+                        <span>Alice: @receipt.Accounts.AccountA.Balance.ToString("N2") · Bob: @receipt.Accounts.AccountB.Balance.ToString("N2") · Total: @receipt.Accounts.Total.ToString("N2")</span>
+                        <span>Ledger: @receipt.Ledger.From → @receipt.Ledger.To · @receipt.Ledger.Amount.ToString("N2") · posted @receipt.Ledger.CreatedUtc.ToString("u")</span>
+                        <span>These are the balances at the time of this read, not necessarily immediately after the selected transfer.</span>
+                    </div>
+                    <div class="document-grid">
+                        <article class="document-card">
+                            <div class="document-title"><div><strong>Accounts</strong><small>accounts / alice and bob</small></div><span class="document-type">JSON</span></div>
+                            <pre><code>@JsonSerializer.Serialize(receipt.Accounts, documentOptions)</code></pre>
+                        </article>
+                        <article class="document-card">
+                            <div class="document-title"><div><strong>Ledger entry</strong><small>ledger / @receipt.Ledger.PartitionKey</small></div><span class="document-type">JSON</span></div>
+                            <pre><code>@JsonSerializer.Serialize(receipt.Ledger, documentOptions)</code></pre>
+                        </article>
+                    </div>
+                }
+            }
+        </div>
+    </section>
+
+    <div class="step-connector" aria-hidden="true"><span>↓</span></div>
+
+    <section class="step-card" aria-labelledby="insufficient-heading">
+        <div class="step-heading">
+            <div class="step-index step-index-amber">03</div>
+            <div>
+                <span class="step-label">FAILURE CONDITION · CLIENT-SIDE VALIDATION</span>
+                <h2 id="insufficient-heading">What if Alice can't afford it?</h2>
+                <p>Prepare Alice with 300, then request a 500 transfer. The client reads both accounts but stops before sending any distributed write transaction.</p>
+            </div>
+        </div>
+        <div class="step-body">
+            <div class="scenario-banner">
+                <div><span class="scenario-caption">ALICE'S BALANCE</span><strong>300</strong></div>
+                <span class="scenario-operator" aria-hidden="true">&lt;</span>
+                <div><span class="scenario-caption">REQUESTED TRANSFER</span><strong>500</strong></div>
+                <span class="scenario-outcome">Insufficient funds</span>
+            </div>
+            <div class="step-actions scenario-actions">
+                <button class="action-button" @onclick="PrepareInsufficientFundsAsync" disabled="@ActionsDisabled">Prepare scenario <span aria-hidden="true">↗</span></button>
+                <button class="secondary-button" @onclick="AttemptInsufficientFundsAsync" disabled="@ScenarioTestDisabled">Attempt 500 transfer</button>
+            </div>
+            <p class="scenario-hint">Preparing overwrites Alice to 300 and Bob to 1,000 in a separate atomic setup transaction. It does not create a ledger entry.</p>
+
+            @if (scenarioBefore is not null)
+            {
+                <div class="section-bar"><div><span class="live-dot"></span> Before and after <span class="section-caption">· consistent account snapshots</span></div></div>
+                <div class="comparison-grid">
+                    <div class="comparison-card">
+                        <span class="comparison-label">BEFORE ATTEMPT</span>
+                        <div><span>Alice</span><strong>@scenarioBefore.AccountA.Balance.ToString("N2")</strong></div>
+                        <div><span>Bob</span><strong>@scenarioBefore.AccountB.Balance.ToString("N2")</strong></div>
+                        <div class="comparison-total"><span>Total</span><strong>@scenarioBefore.Total.ToString("N2")</strong></div>
+                    </div>
+                    <div class="comparison-card">
+                        <span class="comparison-label">AFTER ATTEMPT</span>
+                        @if (scenarioAfter is null)
+                        {
+                            <p class="comparison-placeholder">Run the 500 transfer attempt to compare balances.</p>
+                        }
+                        else
+                        {
+                            <div><span>Alice</span><strong>@scenarioAfter.AccountA.Balance.ToString("N2")</strong></div>
+                            <div><span>Bob</span><strong>@scenarioAfter.AccountB.Balance.ToString("N2")</strong></div>
+                            <div class="comparison-total"><span>Total</span><strong>@scenarioAfter.Total.ToString("N2")</strong></div>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">Prepare the scenario to capture the starting balances.</div>
+            }
+
+            @if (lastAction == "insufficient-test" && lastResult is not null)
+            {
+                <div class="step-feedback @(InsufficientFundsVerified ? "feedback-success" : "feedback-error")" role="status">
+                    <strong>@(InsufficientFundsVerified ? "No write transaction sent · balances unchanged" : "Could not confirm unchanged balances")</strong>
+                    <span>@lastResult.Message</span>
+                </div>
+            }
+            else if (lastAction == "insufficient-setup" && lastResult is not null)
+            {
+                <div class="step-feedback @(lastResult.IsPending ? "feedback-pending" : lastResult.Succeeded && scenarioBefore is not null ? "feedback-success" : "feedback-error")" role="status">
+                    <strong>@(lastResult.IsPending ? "Setup commit unconfirmed" : lastResult.Succeeded && scenarioBefore is not null ? "Scenario ready" : "Scenario not ready")</strong>
+                    <span>@lastResult.Message</span>
+                </div>
+            }
+            <p class="teaching-point"><strong>Teaching point:</strong> the application rejects this request before creating the distributed write transaction. The reads still contact Azure Cosmos DB. The client returns a failed result with status <code>Not submitted</code> and response mode <code>Client-side validation</code>; the UI displays the insufficient-funds message and verifies the balances are unchanged. No write request is sent, so Cosmos DB returns no write-transaction HTTP error or abort status.</p>
+        </div>
+    </section>
+
+    <div class="step-connector" aria-hidden="true"><span>↓</span></div>
+
+    <section class="step-card" aria-labelledby="conflict-heading">
+        <div class="step-heading">
+            <div class="step-index step-index-violet">04</div>
+            <div>
+                <span class="step-label">FAILURE CONDITION · OPTIMISTIC CONCURRENCY</span>
+                <h2 id="conflict-heading">What if Alice changes mid-transfer?</h2>
+                <p>Pause after reading Alice and Bob. Apply an independent write to Alice, then commit with the original ETags to demonstrate an atomic conflict.</p>
+            </div>
+        </div>
+        <div class="step-body">
+            <div class="conflict-instructions">
+                <div><span class="instruction-number">1</span><strong>Stage the transfer</strong><p>Capture both balances and ETags. No write transaction is sent yet.</p></div>
+                <div><span class="instruction-number">2</span><strong>Change Alice independently</strong><p>Use the button below to add 1 to Alice in a separate item write.</p></div>
+                <div><span class="instruction-number">3</span><strong>Commit with stale ETag</strong><p>Alice's conditional patch should fail; Bob and the ledger should stay unchanged.</p></div>
+            </div>
+            <div class="step-actions scenario-actions">
+                <button class="action-button" @onclick="StageConcurrentTransferAsync" disabled="@ActionsDisabled">Stage Alice → Bob transfer <span aria-hidden="true">↗</span></button>
+                <button class="secondary-button" @onclick="ApplyConcurrentWriteAsync" disabled="@(ActionsDisabled || preparedTransfer is null || conflictSubmitted || conflictWriteResult?.Succeeded == true || conflictWriteResult?.IsPending == true)">Change Alice (+1)</button>
+                <button class="secondary-button" @onclick="CommitConcurrentTransferAsync" disabled="@(ActionsDisabled || preparedTransfer is null || conflictSubmitted || conflictWriteResult?.Succeeded != true || conflictWriteResult.IsPending)">Commit staged transfer</button>
+            </div>
+            @if (preparedTransfer is not null)
+            {
+                <div class="stage-details">
+                    <strong>@(conflictWriteResult?.Succeeded == true ? "Alice updated independently · staged ETag is now stale" : "Paused after reads · no transfer writes yet")</strong>
+                    <span>Staged Alice: @preparedTransfer.Before.AccountA.Balance.ToString("N2") · Bob: @preparedTransfer.Before.AccountB.Balance.ToString("N2")</span>
+                    <span>Alice's captured ETag: <code>@preparedTransfer.AliceEtag</code></span>
+                    <span>Ledger ID for this attempt: <code>@preparedTransfer.Ledger.Id</code> (pk: <code>@preparedTransfer.Ledger.PartitionKey</code>)</span>
+                </div>
+                <p class="scenario-hint">The middle button performs one ordinary patch on Alice, separate from the staged distributed transaction. Keep this page open so the original ETags remain available.</p>
+            }
+            else
+            {
+                <div class="empty-state">Reset the accounts in Step 1, then stage a transfer to begin this scenario.</div>
+            }
+
+            @if (preparedTransfer is not null && conflictAfter is not null && conflictLedgerExists is not null)
+            {
+                <div class="comparison-grid conflict-comparison">
+                    <div class="comparison-card">
+                        <span class="comparison-label">BEFORE THE SIDE WRITE</span>
+                        <div><span>Alice</span><strong>@preparedTransfer.Before.AccountA.Balance.ToString("N2")</strong></div>
+                        <div><span>Bob</span><strong>@preparedTransfer.Before.AccountB.Balance.ToString("N2")</strong></div>
+                    </div>
+                    <div class="comparison-card">
+                        <span class="comparison-label">AFTER THE COMMIT ATTEMPT</span>
+                        <div><span>Alice (side write)</span><strong>@conflictAfter.AccountA.Balance.ToString("N2")</strong></div>
+                        <div><span>Bob (transfer)</span><strong>@conflictAfter.AccountB.Balance.ToString("N2")</strong></div>
+                        <div class="comparison-total"><span>Attempt ledger entry</span><strong>@(conflictLedgerExists.Value ? "Found" : "Not found")</strong></div>
+                    </div>
+                </div>
+            }
+            @if (lastAction == "conflict-commit" && lastResult is not null)
+            {
+                <div class="step-feedback @(lastResult.IsPending ? "feedback-pending" : ConflictVerified ? "feedback-success" : "feedback-error")" role="status">
+                    <strong>@(lastResult.IsPending ? "Outcome unknown — do not retry" : ConflictVerified ? "ETag conflict verified · Bob unchanged · no ledger entry" : "Could not verify the expected conflict")</strong>
+                    <span>@lastResult.Message</span>
+                </div>
+            }
+            else if (lastAction == "conflict-stage" && lastResult is not null)
+            {
+                <div class="step-feedback feedback-error" role="status"><strong>Could not stage the transfer</strong><span>@lastResult.Message</span></div>
+            }
+            else if (lastAction == "conflict-write" && lastResult is not null)
+            {
+                <div class="step-feedback @(lastResult.IsPending ? "feedback-pending" : lastResult.Succeeded ? "feedback-success" : "feedback-error")" role="status">
+                    <strong>@(lastResult.IsPending ? "Alice's update is unconfirmed" : lastResult.Succeeded ? "Alice updated; staged ETag is stale" : "Could not update Alice")</strong>
+                    <span>@lastResult.Message</span>
+                </div>
+            }
+            <p class="teaching-point"><strong>Teaching point:</strong> Alice's independent write changes her ETag between the staged read and commit. If the transaction is rejected with Alice's <code>412 PreconditionFailed</code>, Bob's credit and the ledger create abort together. Start over with fresh reads only after a confirmed abort; reconcile first if the response times out.</p>
+        </div>
+    </section>
+
+    <div class="step-connector" aria-hidden="true"><span>↓</span></div>
+
+    <section class="step-card" aria-labelledby="calculated-heading">
+        <div class="step-heading">
+            <div class="step-index step-index-teal">05</div>
+            <div>
+                <span class="step-label">READ · CALCULATE · CONDITIONALLY WRITE</span>
+                <h2 id="calculated-heading">Transfer from a consistent snapshot</h2>
+                <p>Read Alice and Bob together, calculate their next balances in the app, then conditionally write both accounts and a ledger entry as one transaction.</p>
+            </div>
+        </div>
+        <div class="step-body">
+            <div class="transfer-controls">
+                <div class="amount-field">
+                    <label for="calculated-amount">TRANSFER AMOUNT</label>
+                    <div class="amount-input"><span aria-hidden="true">$</span><input id="calculated-amount" type="number" min="0.01" step="0.01" @bind="calculatedAmount" disabled="@ActionsDisabled" /></div>
+                </div>
+                <button class="action-button action-button-teal" @onclick="StageCalculatedTransferAsync" disabled="@(ActionsDisabled || CalculatedOutcomeUnknown)">@(calculatedTransfer is null ? "Read and calculate" : "Read fresh state & recalculate")</button>
+            </div>
+            @if (calculatedError is not null)
+            {
+                <div class="step-feedback feedback-error" role="status"><strong>Could not stage the transfer</strong><span>@calculatedError</span></div>
+            }
+            @if (calculatedTransfer is null)
+            {
+                <div class="empty-state">Reset the accounts in Step 1, then read a consistent snapshot to calculate a proposed transfer.</div>
+            }
+            else
+            {
+                <div class="comparison-grid">
+                    <div class="comparison-card">
+                        <span class="comparison-label">CONSISTENT READ</span>
+                        <div><span>Alice</span><strong>@calculatedTransfer.Before.AccountA.Balance.ToString("N2")</strong></div>
+                        <div><span>Bob</span><strong>@calculatedTransfer.Before.AccountB.Balance.ToString("N2")</strong></div>
+                    </div>
+                    <div class="comparison-card">
+                        <span class="comparison-label">CALCULATED IN THE APP · NOT YET WRITTEN</span>
+                        <div><span>Alice</span><strong>@(calculatedTransfer.Before.AccountA.Balance - calculatedTransfer.Ledger.Amount).ToString("N2")</strong></div>
+                        <div><span>Bob</span><strong>@(calculatedTransfer.Before.AccountB.Balance + calculatedTransfer.Ledger.Amount).ToString("N2")</strong></div>
+                    </div>
+                </div>
+                <div class="stage-details">
+                    <span>Alice's ETag: <code>@calculatedTransfer.AliceEtag</code> · Bob's ETag: <code>@calculatedTransfer.BobEtag</code></span>
+                    <span>Staged amount: @calculatedTransfer.Ledger.Amount.ToString("N2") (change the input and read fresh state to use a different amount)</span>
+                    <span>Attempt ledger ID: <code>@calculatedTransfer.Ledger.Id</code> (pk: <code>@calculatedTransfer.Ledger.PartitionKey</code>)</span>
+                </div>
+                <div class="step-actions scenario-actions">
+                    <button class="secondary-button" @onclick="ChangeAliceForCalculatedTransferAsync" disabled="@(ActionsDisabled || calculatedSubmitted || calculatedSideWrite?.Succeeded == true || CalculatedOutcomeUnknown)">Change Alice (+1) to force a conflict</button>
+                    <button class="action-button" @onclick="CommitCalculatedTransferAsync" disabled="@(ActionsDisabled || calculatedSubmitted || CalculatedOutcomeUnknown)">Submit conditional transfer <span aria-hidden="true">↗</span></button>
+                </div>
+                @if (calculatedSideWrite is not null)
+                {
+                    <div class="step-feedback @(calculatedSideWrite.IsPending ? "feedback-pending" : calculatedSideWrite.Succeeded ? "feedback-success" : "feedback-error")" role="status">
+                        <strong>@(calculatedSideWrite.IsPending ? "Side write outcome unknown" : calculatedSideWrite.Succeeded ? "Alice changed; the staged ETag is stale" : "Side write failed")</strong>
+                        <span>@calculatedSideWrite.Message</span>
+                    </div>
+                }
+                @if (calculatedResult is not null)
+                {
+                    <div class="step-feedback @(calculatedResult.IsPending ? "feedback-pending" : calculatedResult.IsEtagConflict || calculatedResult.Succeeded ? "feedback-success" : "feedback-error")" role="status">
+                        <strong>@(calculatedResult.IsPending ? "Outcome unknown — reconcile before retrying" : calculatedResult.IsEtagConflict ? "Precondition failed — read fresh state to retry" : calculatedResult.Succeeded ? "Calculated transfer committed" : "Transfer did not commit")</strong>
+                        <span>@calculatedResult.Message</span>
+                    </div>
+                }
+            }
+            <p class="teaching-point"><strong>Teaching point:</strong> both read accounts are updated under their captured ETags. The write transaction cannot safely reuse a stale calculation: after a confirmed conflict, choose <strong>Read fresh state &amp; recalculate</strong>. A timeout or unconfirmed commit must be reconciled using the ledger ID before any new attempt. This example does not claim to guard a read-only item.</p>
+        </div>
+    </section>
+
+    @if (isBusy)
+    {
+        <div class="notice notice-info" role="status">Working with Azure Cosmos DB…</div>
+    }
+    else if (lastResult is not null)
+    {
+        <div class="notice @(lastResult.IsPending ? "notice-warning" : lastResult.Succeeded || InsufficientFundsVerified || ConflictVerified ? "notice-success" : "notice-error")" role="status">
+            <strong>@(lastResult.IsPending ? "Outcome not yet confirmed" : ConflictVerified ? "ETag conflict verified" : InsufficientFundsVerified ? "Client-side validation worked" : lastResult.Succeeded && lastAction == "conflict-write" ? "Independent Alice update completed" : lastResult.Succeeded && lastAction == "individual" ? "Individual writes completed" : lastResult.Succeeded ? "Transaction completed" : "Action needs attention")</strong>
+            <p>@lastResult.Message</p>
+            <div class="result-meta">Status: @lastResult.StatusCode · Mode: @lastResult.ResponseMode</div>
+            @if (!string.IsNullOrWhiteSpace(lastResult.ActivityId))
+            {
+                <div class="result-meta">Activity ID: <code>@lastResult.ActivityId</code></div>
+            }
+        </div>
+    }
+
+    <details class="extra-details">
+        <summary>Setup and optional diagnostics <span aria-hidden="true">⌄</span></summary>
+        <div class="details-content">
+            <p>Requires an Azure Cosmos DB for NoSQL account enrolled in the Distributed Transactions preview, with a <code>banking</code> database and <code>accounts</code> and <code>ledger</code> containers partitioned by <code>/pk</code>. The server identity needs the Cosmos DB Built-in Data Contributor data-plane role on both containers.</p>
+            <p>Need to test ordinary writes separately? These are <strong>not transactional</strong> and can partially succeed.</p>
+            <button class="secondary-button" @onclick="UpsertIndividuallyAsync" disabled="@ActionsDisabled">Test individual account writes</button>
+        </div>
+    </details>
+</div>
+
+@code {
+    private static readonly JsonSerializerOptions documentOptions = new() { WriteIndented = true };
+    private decimal amount = 100m;
+    private bool isBusy;
+    private string? lastAction;
+    private AccountSnapshot? snapshot;
+    private TransferReceipt? receipt;
+    private string? receiptError;
+    private string? receiptLedgerId;
+    private string? receiptLedgerPartitionKey;
+    private AccountSnapshot? scenarioBefore;
+    private AccountSnapshot? scenarioAfter;
+    private bool scenarioPrepared;
+    private decimal calculatedAmount = 100m;
+    private PreparedTransfer? calculatedTransfer;
+    private TransactionResult? calculatedSideWrite;
+    private TransactionResult? calculatedResult;
+    private string? calculatedError;
+    private bool calculatedSubmitted;
+    private PreparedTransfer? preparedTransfer;
+    private TransactionResult? conflictWriteResult;
+    private AccountSnapshot? conflictAfter;
+    private bool? conflictLedgerExists;
+    private bool conflictSubmitted;
+    private TransactionResult? lastResult;
+
+    private bool ActionsDisabled => isBusy || !TransactionService.IsConfigured;
+    private bool ScenarioTestDisabled => ActionsDisabled || !scenarioPrepared;
+    private bool CalculatedOutcomeUnknown => calculatedSideWrite?.IsPending == true || calculatedResult?.IsPending == true;
+    private bool InsufficientFundsVerified => lastAction == "insufficient-test" &&
+        lastResult?.IsClientSideRejection == true && scenarioBefore is not null &&
+        scenarioAfter is not null && scenarioBefore == scenarioAfter;
+    private bool ConflictVerified => lastAction == "conflict-commit" &&
+        lastResult?.IsEtagConflict == true && preparedTransfer is not null &&
+        conflictAfter is not null && conflictLedgerExists == false &&
+        conflictAfter.AccountB.Balance == preparedTransfer.Before.AccountB.Balance;
+
+    private async Task ResetAsync()
+    {
+        ClearConcurrentScenario();
+        ClearInsufficientFundsScenario();
+        lastAction = "reset";
+        await RunAsync(TransactionService.ResetAccountsAsync);
+    }
+
+    private async Task UpsertIndividuallyAsync()
+    {
+        ClearConcurrentScenario();
+        ClearInsufficientFundsScenario();
+        lastAction = "individual";
+        snapshot = null;
+        await RunAsync(TransactionService.UpsertAccountsIndividuallyAsync, refreshSnapshot: false);
+    }
+
+    private async Task TransferAsync()
+    {
+        lastAction = "transfer";
+        if (amount <= 0)
+        {
+            lastResult = TransactionResult.Failure("Enter an amount greater than zero.");
+            return;
+        }
+
+        ClearConcurrentScenario();
+        ClearInsufficientFundsScenario();
+        receipt = null;
+        receiptError = null;
+        receiptLedgerId = null;
+        receiptLedgerPartitionKey = null;
+        await RunAsync(cancellationToken => TransactionService.TransferAsync(amount, cancellationToken));
+        if (lastResult is { Succeeded: true, IsPending: false })
+        {
+            receiptLedgerId = lastResult.LedgerId;
+            receiptLedgerPartitionKey = lastResult.LedgerPartitionKey;
+        }
+    }
+
+    private async Task ReadReceiptAsync()
+    {
+        if (receiptLedgerId is null || receiptLedgerPartitionKey is null)
+        {
+            return;
+        }
+
+        isBusy = true;
+        receipt = null;
+        receiptError = null;
+        try
+        {
+            receipt = await TransactionService.ReadTransferReceiptAsync(
+                receiptLedgerId, receiptLedgerPartitionKey, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            receiptError = exception.Message;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task StageCalculatedTransferAsync()
+    {
+        if (CalculatedOutcomeUnknown)
+        {
+            return;
+        }
+
+        lastAction = "calculated-stage";
+        lastResult = null;
+        calculatedTransfer = null;
+        calculatedSideWrite = null;
+        calculatedResult = null;
+        calculatedError = null;
+        calculatedSubmitted = false;
+        isBusy = true;
+
+        try
+        {
+            calculatedTransfer = await TransactionService.PrepareCalculatedTransferAsync(calculatedAmount, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            calculatedError = exception.Message;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task ChangeAliceForCalculatedTransferAsync()
+    {
+        if (calculatedTransfer is null || calculatedSubmitted || CalculatedOutcomeUnknown)
+        {
+            return;
+        }
+
+        lastAction = "calculated-side";
+        lastResult = null;
+        isBusy = true;
+        try
+        {
+            calculatedSideWrite = await TransactionService.ApplyConcurrentAliceUpdateAsync(CancellationToken.None);
+            lastResult = calculatedSideWrite;
+        }
+        catch (Exception exception)
+        {
+            calculatedSideWrite = new TransactionResult(false,
+                $"Alice's independent write outcome could not be determined: {exception.Message}", IsPending: true);
+            lastResult = calculatedSideWrite;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task CommitCalculatedTransferAsync()
+    {
+        if (calculatedTransfer is null || calculatedSubmitted || CalculatedOutcomeUnknown)
+        {
+            return;
+        }
+
+        lastAction = "calculated-commit";
+        lastResult = null;
+        calculatedSubmitted = true;
+        isBusy = true;
+        try
+        {
+            calculatedResult = await TransactionService.CommitCalculatedTransferAsync(calculatedTransfer, CancellationToken.None);
+            lastResult = calculatedResult;
+            if (calculatedResult.Succeeded && !calculatedResult.IsPending)
+            {
+                receipt = null;
+                receiptError = null;
+                receiptLedgerId = calculatedResult.LedgerId;
+                receiptLedgerPartitionKey = calculatedResult.LedgerPartitionKey;
+                snapshot = await TransactionService.ReadSnapshotAsync();
+            }
+            else if (calculatedResult.IsPending)
+            {
+                snapshot = null;
+            }
+        }
+        catch (Exception exception)
+        {
+            calculatedResult = calculatedResult is null
+                ? new TransactionResult(false,
+                    $"The calculated transfer outcome is unknown: {exception.Message}. Check ledger id '{calculatedTransfer.Ledger.Id}' in pk '{calculatedTransfer.Ledger.PartitionKey}' before another attempt.",
+                    IsPending: true)
+                : calculatedResult with { Message = $"{calculatedResult.Message} Snapshot refresh failed: {exception.Message}" };
+            lastResult = calculatedResult;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task PrepareInsufficientFundsAsync()
+    {
+        ClearConcurrentScenario();
+        ClearInsufficientFundsScenario();
+        lastAction = "insufficient-setup";
+        await RunAsync(TransactionService.PrepareInsufficientFundsAsync);
+
+        if (lastResult is { Succeeded: true, IsPending: false } && snapshot is not null)
+        {
+            scenarioBefore = snapshot;
+            scenarioPrepared = true;
+        }
+    }
+
+    private async Task ApplyConcurrentWriteAsync()
+    {
+        if (preparedTransfer is null || conflictSubmitted || conflictWriteResult?.Succeeded == true || conflictWriteResult?.IsPending == true)
+        {
+            return;
+        }
+
+        lastAction = "conflict-write";
+        lastResult = null;
+        isBusy = true;
+
+        try
+        {
+            conflictWriteResult = await TransactionService.ApplyConcurrentAliceUpdateAsync(CancellationToken.None);
+            lastResult = conflictWriteResult;
+            if (conflictWriteResult.Succeeded)
+            {
+                try
+                {
+                    snapshot = await TransactionService.ReadSnapshotAsync();
+                }
+                catch (Exception exception)
+                {
+                    snapshot = null;
+                    lastResult = lastResult with { Message = $"{lastResult.Message} Snapshot refresh failed: {exception.Message}" };
+                }
+            }
+            else
+            {
+                snapshot = null;
+            }
+        }
+        catch (Exception exception)
+        {
+            snapshot = null;
+            lastResult = TransactionResult.Failure(exception.Message);
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task AttemptInsufficientFundsAsync()
+    {
+        ClearConcurrentScenario();
+        lastAction = "insufficient-test";
+        isBusy = true;
+        lastResult = null;
+        scenarioAfter = null;
+
+        try
+        {
+            AccountSnapshot before = await TransactionService.ReadSnapshotAsync();
+            scenarioBefore = before;
+
+            if (before.AccountA.Balance != 300m || before.AccountB.Balance != 1000m)
+            {
+                scenarioPrepared = false;
+                lastResult = TransactionResult.Failure("The setup balances have changed. Prepare the scenario again before attempting the transfer.");
+                return;
+            }
+
+            lastResult = await TransactionService.TransferAsync(500m, CancellationToken.None);
+            if (lastResult.IsClientSideRejection)
+            {
+                scenarioAfter = await TransactionService.ReadSnapshotAsync();
+                snapshot = scenarioAfter;
+                if (scenarioBefore != scenarioAfter)
+                {
+                    scenarioPrepared = false;
+                    lastResult = lastResult with { Message = $"{lastResult.Message} Another operation changed the balances during the demonstration; prepare again to compare unchanged state." };
+                }
+            }
+            else
+            {
+                scenarioPrepared = false;
+                if (lastResult.IsPending)
+                {
+                    snapshot = null;
+                }
+                else
+                {
+                    scenarioAfter = await TransactionService.ReadSnapshotAsync();
+                    snapshot = scenarioAfter;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            scenarioPrepared = false;
+            lastResult = TransactionResult.Failure(exception.Message);
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private void ClearInsufficientFundsScenario()
+    {
+        scenarioBefore = null;
+        scenarioAfter = null;
+        scenarioPrepared = false;
+    }
+
+    private async Task StageConcurrentTransferAsync()
+    {
+        ClearInsufficientFundsScenario();
+        ClearConcurrentScenario();
+        lastAction = "conflict-stage";
+        lastResult = null;
+        isBusy = true;
+
+        try
+        {
+            preparedTransfer = await TransactionService.PrepareConcurrentTransferAsync(CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            lastResult = TransactionResult.Failure(exception.Message);
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task CommitConcurrentTransferAsync()
+    {
+        if (preparedTransfer is null || conflictSubmitted || conflictWriteResult?.Succeeded != true || conflictWriteResult.IsPending)
+        {
+            return;
+        }
+
+        lastAction = "conflict-commit";
+        lastResult = null;
+        isBusy = true;
+        conflictAfter = null;
+        conflictLedgerExists = null;
+
+        try
+        {
+            lastResult = await TransactionService.CommitPreparedTransferAsync(preparedTransfer, CancellationToken.None);
+            if (lastResult.StatusCode != "Not submitted")
+            {
+                conflictSubmitted = true;
+            }
+
+            if (conflictSubmitted && !lastResult.IsPending)
+            {
+                conflictAfter = await TransactionService.ReadSnapshotAsync();
+                conflictLedgerExists = await TransactionService.LedgerEntryExistsAsync(preparedTransfer, CancellationToken.None);
+                snapshot = conflictAfter;
+            }
+            else if (lastResult.IsPending)
+            {
+                snapshot = null;
+            }
+        }
+        catch (Exception exception)
+        {
+            conflictSubmitted = true;
+            snapshot = null;
+            lastResult = lastResult is null
+                ? new TransactionResult(false,
+                    $"The staged outcome is unknown: {exception.Message}. Check ledger id '{preparedTransfer.Ledger.Id}' before another attempt.",
+                    IsPending: true)
+                : lastResult with
+                {
+                    IsEtagConflict = false,
+                    Message = $"{lastResult.Message} Verification could not finish: {exception.Message}. Check the ledger ID before another attempt."
+                };
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private void ClearConcurrentScenario()
+    {
+        preparedTransfer = null;
+        conflictWriteResult = null;
+        conflictAfter = null;
+        conflictLedgerExists = null;
+        conflictSubmitted = false;
+    }
+
+    private async Task RefreshAsync()
+    {
+        lastAction = "refresh";
+        isBusy = true;
+        lastResult = null;
+
+        try
+        {
+            snapshot = await TransactionService.ReadSnapshotAsync();
+        }
+        catch (Exception exception)
+        {
+            lastResult = TransactionResult.Failure(exception.Message);
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task RunAsync(Func<CancellationToken, Task<TransactionResult>> operation, bool refreshSnapshot = true)
+    {
+        isBusy = true;
+        lastResult = null;
+        if (refreshSnapshot)
+        {
+            snapshot = null;
+        }
+
+        try
+        {
+            lastResult = await operation(CancellationToken.None);
+            if (lastResult.Succeeded && !lastResult.IsPending && refreshSnapshot)
+            {
+                try
+                {
+                    snapshot = await TransactionService.ReadSnapshotAsync();
+                }
+                catch (Exception exception)
+                {
+                    snapshot = null;
+                    lastResult = lastResult with { Message = $"{lastResult.Message} Snapshot refresh failed: {exception.Message}" };
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            lastResult = TransactionResult.Failure(exception.Message);
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+}
