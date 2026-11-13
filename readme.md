@@ -24,10 +24,12 @@ flowchart LR
 | 3–5 (optional) | Try insufficient funds, an ETag conflict, and a calculated transfer | See why validation and concurrency checks matter. |
 
 > [!NOTE]
-> This is a learning demo, **not a banking application**. Start with steps 1 and 2; explore the other scenarios later.
+> This is a learning demo. Start with steps 1 and 2; explore the other scenarios later.
 
 > [!IMPORTANT]
-> Distributed transactions require [preview enrollment](https://aka.ms/cosmosdb/dtx-onboard) and a **provisioned-throughput** Cosmos DB account, which may incur charges. The preview has no SLA. **Do not expose this app to untrusted users**: it has no sign-in or write limits, and all visitors share the same demo accounts.
+> Distributed transactions in Azure Cosmos DB are currently in public preview. This preview is provided without a service-level agreement (SLA). Behavior, limits, and supported scenarios could change before general availability.
+
+> Distributed transactions require [preview enrollment](https://aka.ms/cosmosdb/dtx-onboard) and a **provisioned-throughput** Cosmos DB account, which may incur charges.See the [distributed transactions guide](https://learn.microsoft.com/azure/cosmos-db/how-to-configure-and-use-distributed-transactions) for prerequisites and additional details.
 
 ## Quick start
 
